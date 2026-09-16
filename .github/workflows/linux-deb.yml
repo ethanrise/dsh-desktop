@@ -14,7 +14,7 @@ on:
     - cron: "17 2 * * *"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: linux-deb-release
@@ -23,6 +23,9 @@ concurrency:
 jobs:
   sync-upstream:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -42,8 +45,10 @@ jobs:
 
   discover:
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     outputs:
       tag: ${{ steps.version.outputs.tag }}
+      source_sha: ${{ steps.version.outputs.source_sha }}
       should_build: ${{ steps.version.outputs.should_build }}
     steps:
       - uses: actions/checkout@v4
@@ -64,10 +69,11 @@ jobs:
 
           tag="$REQUESTED_TAG"
           if [ -z "$tag" ]; then
-            tag="$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)"
+            tag="$(gh api repos/dataelement/dsh-desktop/releases/latest --jq '.tag_name')"
           fi
           test -n "$tag"
           git rev-parse --verify "refs/tags/$tag^{commit}" >/dev/null
+          source_sha="$(git rev-list -n 1 "$tag")"
 
           version="${tag#v}"
           asset="dsh-desktop-${version}-linux-amd64.deb"
@@ -79,12 +85,16 @@ jobs:
           fi
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
           echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
 
   build:
     needs: discover
     if: needs.discover.outputs.should_build == 'true'
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -93,12 +103,14 @@ jobs:
       - name: Check out exact upstream source
         env:
           UPSTREAM_TAG: ${{ needs.discover.outputs.tag }}
+          SOURCE_SHA: ${{ needs.discover.outputs.source_sha }}
         run: |
           set -euo pipefail
           git remote add upstream https://github.com/dataelement/dsh-desktop.git 2>/dev/null || \
             git remote set-url upstream https://github.com/dataelement/dsh-desktop.git
           git fetch --force upstream "refs/tags/$UPSTREAM_TAG:refs/tags/$UPSTREAM_TAG"
           git checkout --detach "$UPSTREAM_TAG"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
 
       - uses: actions/setup-node@v4
         with:
@@ -133,6 +145,8 @@ jobs:
               }
             }
           }
+          pkg.build.extraResources ??= []
+          pkg.build.extraResources.push({ from: 'LICENSE', to: 'LICENSE' })
           fs.writeFileSync('package.json', `${JSON.stringify(pkg, null, 2)}\n`)
           NODE
 
@@ -166,28 +180,82 @@ jobs:
           mv dist/dsh-desktop-linux-amd64.deb \
             "dist/dsh-desktop-${UPSTREAM_TAG#v}-linux-amd64.deb"
 
+      - name: Verify DEB contents and metadata
+        env:
+          UPSTREAM_TAG: ${{ needs.discover.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${UPSTREAM_TAG#v}"
+          asset="dist/dsh-desktop-${version}-linux-amd64.deb"
+          test "$(dpkg-deb -f "$asset" Package)" = "dsh-desktop"
+          test "$(dpkg-deb -f "$asset" Version)" = "$version"
+          test "$(dpkg-deb -f "$asset" Architecture)" = "amd64"
+
+          verify_root="$RUNNER_TEMP/dsh-deb-verify"
+          mkdir -p "$verify_root"
+          dpkg-deb -x "$asset" "$verify_root"
+          test -f "$verify_root/usr/share/applications/dsh-desktop.desktop"
+          grep -Fxq 'Icon=dsh-desktop' \
+            "$verify_root/usr/share/applications/dsh-desktop.desktop"
+          grep -Fxq 'StartupWMClass=dsh-desktop' \
+            "$verify_root/usr/share/applications/dsh-desktop.desktop"
+          test -f "$verify_root/opt/DSH Desktop/resources/LICENSE"
+          for size in 16 24 32 48 64 128 256 512 1024; do
+            test -f "$verify_root/usr/share/icons/hicolor/${size}x${size}/apps/dsh-desktop.png"
+          done
+
+          (cd dist && sha256sum "$(basename "$asset")" > SHA256SUMS)
+
       - uses: actions/upload-artifact@v4
         with:
           name: dsh-desktop-linux-amd64-${{ needs.discover.outputs.tag }}
-          path: dist/dsh-desktop-*-linux-amd64.deb
+          path: |
+            dist/dsh-desktop-*-linux-amd64.deb
+            dist/SHA256SUMS
           if-no-files-found: error
+          retention-days: 7
 
       - name: Publish unofficial Linux release asset
         env:
           GH_TOKEN: ${{ github.token }}
           UPSTREAM_TAG: ${{ needs.discover.outputs.tag }}
+          SOURCE_SHA: ${{ needs.discover.outputs.source_sha }}
         run: |
           set -euo pipefail
-          notes="Unofficial Linux x64 DEB built from dataelement/dsh-desktop tag $UPSTREAM_TAG. This package is maintained independently and is not an official DataElement release."
           asset="dist/dsh-desktop-${UPSTREAM_TAG#v}-linux-amd64.deb"
+          cat > "$RUNNER_TEMP/release-notes.md" <<EOF
+          ## Unofficial Linux build
+
+          Community-maintained Linux amd64 package built from
+          [dataelement/dsh-desktop@$UPSTREAM_TAG](https://github.com/dataelement/dsh-desktop/tree/$UPSTREAM_TAG).
+
+          - Upstream tag: \`$UPSTREAM_TAG\`
+          - Source commit: \`$SOURCE_SHA\`
+          - Architecture: \`amd64\`
+          - Package format: \`.deb\`
+
+          Install:
+
+          \`\`\`bash
+          sudo apt install ./$(basename "$asset")
+          \`\`\`
+
+          Verify the download with the attached \`SHA256SUMS\` file.
+
+          This is an unofficial community build and is not an official DataElement release.
+          EOF
           if gh release view "$UPSTREAM_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$UPSTREAM_TAG" "$asset" \
+            gh release upload "$UPSTREAM_TAG" "$asset" dist/SHA256SUMS \
               --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit "$UPSTREAM_TAG" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
+              --title "DSH Desktop $UPSTREAM_TAG - Unofficial Linux build" \
+              --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$UPSTREAM_TAG" "$asset" \
+            gh release create "$UPSTREAM_TAG" "$asset" dist/SHA256SUMS \
               --repo "$GITHUB_REPOSITORY" \
               --title "DSH Desktop $UPSTREAM_TAG - Unofficial Linux build" \
-              --notes "$notes"
+              --notes-file "$RUNNER_TEMP/release-notes.md"
           fi
           gh release delete-asset "$UPSTREAM_TAG" dsh-desktop-linux-amd64.deb \
             --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
