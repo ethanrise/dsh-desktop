@@ -21,6 +21,25 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  sync-upstream:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge upstream main into fork
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/dataelement/dsh-desktop.git 2>/dev/null || \
+            git remote set-url upstream https://github.com/dataelement/dsh-desktop.git
+          git fetch upstream main
+          git merge --no-edit upstream/main
+          git push origin HEAD:main
+
   discover:
     runs-on: ubuntu-24.04
     outputs:
