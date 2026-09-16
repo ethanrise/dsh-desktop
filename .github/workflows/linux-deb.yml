@@ -124,11 +124,36 @@ jobs:
           pkg.build.linux = {
             target: [{ target: 'deb', arch: ['x64'] }],
             category: 'Development',
-            icon: 'build/app-icon.png',
+            icon: 'build/linux-icons',
             maintainer: 'ethanrise <ethanrise.ai@gmail.com>',
-            artifactName: 'dsh-desktop-linux-${arch}.${ext}'
+            artifactName: 'dsh-desktop-linux-${arch}.${ext}',
+            desktop: {
+              entry: {
+                StartupWMClass: 'dsh-desktop'
+              }
+            }
           }
           fs.writeFileSync('package.json', `${JSON.stringify(pkg, null, 2)}\n`)
+          NODE
+
+      - name: Generate Linux icon sizes
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const path = require('node:path')
+          const sharp = require('sharp')
+          const sizes = [16, 24, 32, 48, 64, 128, 256, 512, 1024]
+          const output = path.join('build', 'linux-icons')
+          fs.mkdirSync(output, { recursive: true })
+          Promise.all(sizes.map((size) =>
+            sharp('build/app-icon.png')
+              .resize(size, size)
+              .png()
+              .toFile(path.join(output, `${size}x${size}.png`))
+          )).catch((error) => {
+            console.error(error)
+            process.exit(1)
+          })
           NODE
 
       - name: Build application and DEB
