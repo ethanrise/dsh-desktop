@@ -49,7 +49,7 @@ jobs:
           test -n "$tag"
           git rev-parse --verify "refs/tags/$tag^{commit}" >/dev/null
 
-          asset="dsh-desktop-linux-x64.deb"
+          asset="dsh-desktop-linux-amd64.deb"
           should_build=true
           if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
             --jq ".assets[].name" 2>/dev/null | grep -Fxq "$asset"; then
@@ -96,6 +96,7 @@ jobs:
             target: [{ target: 'deb', arch: ['x64'] }],
             category: 'Development',
             icon: 'build/app-icon.png',
+            maintainer: 'ethanrise <ethanrise.ai@gmail.com>',
             artifactName: 'dsh-desktop-linux-${arch}.${ext}'
           }
           fs.writeFileSync('package.json', `${JSON.stringify(pkg, null, 2)}\n`)
@@ -105,12 +106,12 @@ jobs:
         run: |
           npm run build
           npx electron-builder --linux deb --x64 --publish never
-          test -f dist/dsh-desktop-linux-x64.deb
+          test -f dist/dsh-desktop-linux-amd64.deb
 
       - uses: actions/upload-artifact@v4
         with:
-          name: dsh-desktop-linux-x64-${{ needs.discover.outputs.tag }}
-          path: dist/dsh-desktop-linux-x64.deb
+          name: dsh-desktop-linux-amd64-${{ needs.discover.outputs.tag }}
+          path: dist/dsh-desktop-linux-amd64.deb
           if-no-files-found: error
 
       - name: Publish unofficial Linux release asset
@@ -121,10 +122,10 @@ jobs:
           set -euo pipefail
           notes="Unofficial Linux x64 DEB built from dataelement/dsh-desktop tag $UPSTREAM_TAG. This package is maintained independently and is not an official DataElement release."
           if gh release view "$UPSTREAM_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$UPSTREAM_TAG" dist/dsh-desktop-linux-x64.deb \
+            gh release upload "$UPSTREAM_TAG" dist/dsh-desktop-linux-amd64.deb \
               --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$UPSTREAM_TAG" dist/dsh-desktop-linux-x64.deb \
+            gh release create "$UPSTREAM_TAG" dist/dsh-desktop-linux-amd64.deb \
               --repo "$GITHUB_REPOSITORY" \
               --title "DSH Desktop $UPSTREAM_TAG - Unofficial Linux build" \
               --notes "$notes"
