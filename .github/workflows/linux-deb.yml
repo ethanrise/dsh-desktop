@@ -1,6 +1,9 @@
 name: Build unofficial Linux DEB
 
 on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/linux-deb.yml]
   workflow_dispatch:
     inputs:
       tag:
