@@ -1,0 +1,128 @@
+name: Build unofficial Linux DEB
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream tag to build (leave empty for latest stable release)"
+        required: false
+        type: string
+  schedule:
+    - cron: "17 2 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: linux-deb-release
+  cancel-in-progress: false
+
+jobs:
+  discover:
+    runs-on: ubuntu-24.04
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      should_build: ${{ steps.version.outputs.should_build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find upstream release to build
+        id: version
+        env:
+          REQUESTED_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/dataelement/dsh-desktop.git 2>/dev/null || \
+            git remote set-url upstream https://github.com/dataelement/dsh-desktop.git
+          git fetch --force --tags upstream
+
+          tag="$REQUESTED_TAG"
+          if [ -z "$tag" ]; then
+            tag="$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)"
+          fi
+          test -n "$tag"
+          git rev-parse --verify "refs/tags/$tag^{commit}" >/dev/null
+
+          asset="dsh-desktop-linux-x64.deb"
+          should_build=true
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq ".assets[].name" 2>/dev/null | grep -Fxq "$asset"; then
+            should_build=false
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: discover
+    if: needs.discover.outputs.should_build == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check out exact upstream source
+        env:
+          UPSTREAM_TAG: ${{ needs.discover.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/dataelement/dsh-desktop.git 2>/dev/null || \
+            git remote set-url upstream https://github.com/dataelement/dsh-desktop.git
+          git fetch --force upstream "refs/tags/$UPSTREAM_TAG:refs/tags/$UPSTREAM_TAG"
+          git checkout --detach "$UPSTREAM_TAG"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Add Linux packaging metadata
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'))
+          pkg.build ??= {}
+          pkg.build.linux = {
+            target: [{ target: 'deb', arch: ['x64'] }],
+            category: 'Development',
+            icon: 'build/app-icon.png',
+            artifactName: 'dsh-desktop-linux-${arch}.${ext}'
+          }
+          fs.writeFileSync('package.json', `${JSON.stringify(pkg, null, 2)}\n`)
+          NODE
+
+      - name: Build application and DEB
+        run: |
+          npm run build
+          npx electron-builder --linux deb --x64 --publish never
+          test -f dist/dsh-desktop-linux-x64.deb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-desktop-linux-x64-${{ needs.discover.outputs.tag }}
+          path: dist/dsh-desktop-linux-x64.deb
+          if-no-files-found: error
+
+      - name: Publish unofficial Linux release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ needs.discover.outputs.tag }}
+        run: |
+          set -euo pipefail
+          notes="Unofficial Linux x64 DEB built from dataelement/dsh-desktop tag $UPSTREAM_TAG. This package is maintained independently and is not an official DataElement release."
+          if gh release view "$UPSTREAM_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$UPSTREAM_TAG" dist/dsh-desktop-linux-x64.deb \
+              --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$UPSTREAM_TAG" dist/dsh-desktop-linux-x64.deb \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "DSH Desktop $UPSTREAM_TAG - Unofficial Linux build" \
+              --notes "$notes"
+          fi
