@@ -40,7 +40,15 @@ jobs:
           git remote add upstream https://github.com/dataelement/dsh-desktop.git 2>/dev/null || \
             git remote set-url upstream https://github.com/dataelement/dsh-desktop.git
           git fetch upstream main
-          git merge --no-edit upstream/main
+          git merge --no-commit --no-ff upstream/main
+          # The GitHub App token cannot update workflow files. Keep this fork's
+          # release automation while syncing all other upstream source changes.
+          rm -rf .github/workflows
+          git checkout HEAD -- .github/workflows
+          git add -A .github/workflows
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: sync upstream main (preserve fork workflows)"
+          fi
           git push origin HEAD:main
 
   discover:
@@ -48,6 +56,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       tag: ${{ steps.version.outputs.tag }}
+      release_tag: ${{ steps.version.outputs.release_tag }}
       source_sha: ${{ steps.version.outputs.source_sha }}
       should_build: ${{ steps.version.outputs.should_build }}
     steps:
@@ -76,15 +85,17 @@ jobs:
           source_sha="$(git rev-list -n 1 "$tag")"
 
           version="${tag#v}"
+          release_tag="linux-$tag"
           asset="dsh-desktop-${version}-linux-amd64.deb"
           should_build=true
           if [ "$EVENT_NAME" != "push" ] && \
-            gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
+            gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" --json assets \
             --jq ".assets[].name" 2>/dev/null | grep -Fxq "$asset"; then
             should_build=false
           fi
 
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
           echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
           echo "should_build=$should_build" >> "$GITHUB_OUTPUT"
 
@@ -111,11 +122,6 @@ jobs:
           git fetch --force upstream "refs/tags/$UPSTREAM_TAG:refs/tags/$UPSTREAM_TAG"
           git checkout --detach "$UPSTREAM_TAG"
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-          # Keep this fork's release tag aligned with the exact upstream tag.
-          # Without this push, `gh release create` may create the tag at the
-          # fork's default-branch HEAD instead of at the source we packaged.
-          git tag --force "$UPSTREAM_TAG" "$SOURCE_SHA"
-          git push --force origin "refs/tags/$UPSTREAM_TAG:refs/tags/$UPSTREAM_TAG"
 
       - uses: actions/setup-node@v4
         with:
@@ -235,6 +241,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           UPSTREAM_TAG: ${{ needs.discover.outputs.tag }}
+          RELEASE_TAG: ${{ needs.discover.outputs.release_tag }}
           SOURCE_SHA: ${{ needs.discover.outputs.source_sha }}
         run: |
           set -euo pipefail
@@ -260,18 +267,30 @@ jobs:
 
           This is an unofficial community build and is not an official DataElement release.
           EOF
-          if gh release view "$UPSTREAM_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$UPSTREAM_TAG" "$asset" dist/SHA256SUMS \
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$asset" dist/SHA256SUMS \
               --clobber --repo "$GITHUB_REPOSITORY"
-            gh release edit "$UPSTREAM_TAG" \
+            gh release edit "$RELEASE_TAG" \
               --notes-file "$RUNNER_TEMP/release-notes.md" \
               --title "DSH Desktop $UPSTREAM_TAG - Unofficial Linux build" \
               --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$UPSTREAM_TAG" "$asset" dist/SHA256SUMS \
+            gh release create "$RELEASE_TAG" "$asset" dist/SHA256SUMS \
               --repo "$GITHUB_REPOSITORY" \
+              --target main \
               --title "DSH Desktop $UPSTREAM_TAG - Unofficial Linux build" \
               --notes-file "$RUNNER_TEMP/release-notes.md"
+          fi
+          # Remove a legacy release only when its same-name tag points at the
+          # wrong commit. Correct upstream tags are preserved.
+          legacy_commit="$(git ls-remote origin "refs/tags/$UPSTREAM_TAG^{}" | awk '{print $1}')"
+          if [ -z "$legacy_commit" ]; then
+            legacy_commit="$(git ls-remote origin "refs/tags/$UPSTREAM_TAG" | awk '{print $1}')"
+          fi
+          if [ -n "$legacy_commit" ] && [ "$legacy_commit" != "$SOURCE_SHA" ]; then
+            gh release delete "$UPSTREAM_TAG" --cleanup-tag --yes \
+              --repo "$GITHUB_REPOSITORY" || \
+              echo "::warning::Could not remove legacy release/tag $UPSTREAM_TAG"
           fi
           gh release delete-asset "$UPSTREAM_TAG" dsh-desktop-linux-amd64.deb \
             --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
