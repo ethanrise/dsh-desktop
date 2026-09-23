@@ -111,6 +111,11 @@ jobs:
           git fetch --force upstream "refs/tags/$UPSTREAM_TAG:refs/tags/$UPSTREAM_TAG"
           git checkout --detach "$UPSTREAM_TAG"
           test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          # Keep this fork's release tag aligned with the exact upstream tag.
+          # Without this push, `gh release create` may create the tag at the
+          # fork's default-branch HEAD instead of at the source we packaged.
+          git tag --force "$UPSTREAM_TAG" "$SOURCE_SHA"
+          git push --force origin "refs/tags/$UPSTREAM_TAG:refs/tags/$UPSTREAM_TAG"
 
       - uses: actions/setup-node@v4
         with:
@@ -187,19 +192,30 @@ jobs:
           set -euo pipefail
           version="${UPSTREAM_TAG#v}"
           asset="dist/dsh-desktop-${version}-linux-amd64.deb"
+          dpkg-deb --info "$asset" >/dev/null
+          dpkg-deb --contents "$asset" >/dev/null
           test "$(dpkg-deb -f "$asset" Package)" = "dsh-desktop"
           test "$(dpkg-deb -f "$asset" Version)" = "$version"
           test "$(dpkg-deb -f "$asset" Architecture)" = "amd64"
+          test -n "$(dpkg-deb -f "$asset" Depends)"
 
           verify_root="$RUNNER_TEMP/dsh-deb-verify"
           mkdir -p "$verify_root"
           dpkg-deb -x "$asset" "$verify_root"
+          test -x "$verify_root/opt/DSH Desktop/dsh-desktop"
+          test -f "$verify_root/opt/DSH Desktop/resources/app/package.json"
+          test -f "$verify_root/opt/DSH Desktop/resources/app/out/main/index.js"
+          test -f "$verify_root/opt/DSH Desktop/resources/app/out/preload/index.cjs"
+          test -x "$verify_root/opt/DSH Desktop/resources/app/node_modules/node/bin/node"
+          test -f "$verify_root/opt/DSH Desktop/resources/icon.png"
           test -f "$verify_root/usr/share/applications/dsh-desktop.desktop"
           grep -Fxq 'Icon=dsh-desktop' \
             "$verify_root/usr/share/applications/dsh-desktop.desktop"
           grep -Fxq 'StartupWMClass=dsh-desktop' \
             "$verify_root/usr/share/applications/dsh-desktop.desktop"
           test -f "$verify_root/opt/DSH Desktop/resources/LICENSE"
+          test "$(node -p 'require(process.argv[1]).version' \
+            "$verify_root/opt/DSH Desktop/resources/app/package.json")" = "$version"
           for size in 16 24 32 48 64 128 256 512 1024; do
             test -f "$verify_root/usr/share/icons/hicolor/${size}x${size}/apps/dsh-desktop.png"
           done
