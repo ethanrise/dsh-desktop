@@ -21,6 +21,7 @@ import {
 } from './generations/registry.mjs'
 import { DEFAULT_NPM_REGISTRY, resolveMarketRegistry } from './market-registry.mjs'
 import { SIDELINE_MARKER } from './pnpm-runner.mjs'
+import { registerDeveloperPluginInstaller } from './developer-installer.mjs'
 import { removeTree } from './remove-tree.mjs'
 
 export const RECOMMENDED_MARKET_VERSION = '^1.65.1'
@@ -919,6 +920,7 @@ export async function apply(ctx) {
   ctx.provide('desktopPnpm', desktopPnpm)
   ctx.provide('profileBundlePackageBackend', profileBundlePackageBackend)
   ctx.effect(() => () => desktopPnpm.dispose(), 'dsh-desktop-market-installer: desktop pnpm')
+  registerDeveloperPluginInstaller(ctx, { desktopPnpm, directory, trustedRequest: isTrustedRequest })
 
   const runProfileCommand = async (args, action) => {
     const handle = desktopPnpm.runPlugin(args, directory)
