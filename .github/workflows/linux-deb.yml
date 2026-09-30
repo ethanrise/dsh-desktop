@@ -64,11 +64,20 @@ jobs:
             sha="$(gh api "repos/$UPSTREAM_REPO/commits/$tag" --jq .sha)" || {
               echo "::warning::Upstream tag $tag not found, skipping"; continue; }
             asset="dsh-desktop-${tag#v}-linux-amd64.deb"
-            if [ "$FORCE" != "true" ] && \
-              gh release view "linux-$tag" --repo "$GITHUB_REPOSITORY" --json assets \
-                --jq '.assets[].name' 2>/dev/null | grep -Fxq "$asset"; then
-              echo "linux-$tag already has $asset"
-              continue
+            if [ "$FORCE" != "true" ]; then
+              # Early builds were published under the bare upstream tag (e.g.
+              # v0.9.0) before the linux- prefix; count those as built too.
+              built=""
+              for existing in "linux-$tag" "$tag"; do
+                if gh release view "$existing" --repo "$GITHUB_REPOSITORY" --json assets \
+                  --jq '.assets[].name' 2>/dev/null | grep -Fxq "$asset"; then
+                  built="$existing"; break
+                fi
+              done
+              if [ -n "$built" ]; then
+                echo "$built already has $asset"
+                continue
+              fi
             fi
             echo "Will build $tag ($sha)"
             tags+=("{\"tag\":\"$tag\",\"sha\":\"$sha\"}")
