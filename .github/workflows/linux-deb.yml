@@ -251,10 +251,42 @@ jobs:
             gh release edit "$release_tag" --title "$title" --notes-file "$RUNNER_TEMP/notes.md" \
               --repo "$GITHUB_REPOSITORY"
           else
+            # Never let a backfilled older version become "Latest";
+            # the latest-release job below picks the highest version.
             gh release create "$release_tag" "$asset" dist/SHA256SUMS $prerelease \
+              --latest=false \
               --target "$GITHUB_SHA" --title "$title" --notes-file "$RUNNER_TEMP/notes.md" \
               --repo "$GITHUB_REPOSITORY"
           fi
+
+  # Mark the highest stable linux-v* release as "Latest", regardless of the
+  # order releases were created in. Runs every time, so it also repairs a
+  # wrong marker left by earlier runs.
+  latest-release:
+    needs: build
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Mark highest stable version as Latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          highest="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+            --exclude-drafts --exclude-pre-releases --json tagName --jq '.[].tagName' \
+            | grep -E '^linux-v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
+          if [ -z "$highest" ]; then
+            echo "No stable linux-v* release yet"; exit 0
+          fi
+          current="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)"
+          if [ "$current" = "$highest" ]; then
+            echo "$highest is already Latest"; exit 0
+          fi
+          echo "Latest: ${current:-none} -> $highest"
+          gh release edit "$highest" --latest --repo "$GITHUB_REPOSITORY"
 
   # GitHub disables scheduled workflows after 60 days without repository
   # activity. Now that nothing commits here automatically, re-enable monthly.
