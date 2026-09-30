@@ -10,6 +10,7 @@ window.__ModuleLoader__.load({
     const STATUS_PATH = '/dsh-desktop/market-installer/status'
     const INSTALL_PATH = '/dsh-desktop/market-installer/install'
     const UNINSTALL_PATH = '/dsh-desktop/market-installer/uninstall'
+    const DEVELOPER_INSTALL_PATH = '/dsh-desktop/developer-plugin/install'
     const MARKET_REPOSITORY = 'https://github.com/dsh-market/dsh-market'
 
     const en = {
@@ -45,6 +46,7 @@ window.__ModuleLoader__.load({
       removed: 'Plugin market uninstalled',
       removedHint: 'dsh-market has been removed. Restart Harness to finish.',
       uninstallFailed: 'Plugin market could not be uninstalled.',
+      developerTab: 'Developer install', developerTitle: 'Install a development plugin', developerIntro: 'Install a public GitHub repository or a local plugin directory through Desktop’s isolated generation backend.', developerGithub: 'GitHub repository', developerLocal: 'Local directory', developerPlaceholderGithub: 'https://github.com/owner/repo', developerPlaceholderLocal: '/absolute/path/to/plugin', developerInstall: 'Install', developerInstalling: 'Installing…', developerSuccess: 'Installed. Restart Harness to load the plugin.', developerRestart: 'Restart Harness', developerWarning: 'Developer plugins are not reviewed by DSH Desktop. Only install code you trust.',
       builtInImageTitle: 'Built-in image generation', builtInImageEnabled: 'The built-in plugin is on.', builtInImageDisabled: 'The built-in plugin is off. You can use the market version.', builtInImageEnable: 'Enable built-in plugin', builtInImageConflict: 'Disable the market version of image generation before enabling the built-in plugin.', builtInImageFailed: 'Could not read or change the built-in plugin state.', builtInImageRetry: 'Try again', builtInImageRestart: 'Restart Harness to apply', builtInImagePending: 'The built-in plugin will load after Harness restarts.'
     }
 
@@ -81,6 +83,7 @@ window.__ModuleLoader__.load({
       removed: '插件市场已卸载',
       removedHint: 'dsh-market 已移除，请重启 Harness 完成卸载。',
       uninstallFailed: '插件市场卸载失败。',
+      developerTab: '开发者安装', developerTitle: '安装开发插件', developerIntro: '通过 Desktop 的隔离 generation 后端安装公开 GitHub 仓库或本地插件目录。', developerGithub: 'GitHub 仓库', developerLocal: '本地目录', developerPlaceholderGithub: 'https://github.com/owner/repo', developerPlaceholderLocal: '/插件的绝对路径', developerInstall: '安装', developerInstalling: '安装中…', developerSuccess: '安装完成。重启 Harness 后加载插件。', developerRestart: '重启 Harness', developerWarning: '开发插件未经 DSH Desktop 审核，请只安装你信任的代码。',
       builtInImageTitle: '内置生图工具', builtInImageEnabled: '内置插件已启用。', builtInImageDisabled: '内置插件已关闭，可以使用市场版本。', builtInImageEnable: '启用内置插件', builtInImageConflict: '请先停用市场版本的生图工具，再启用内置插件。', builtInImageFailed: '无法读取或更改内置插件状态。', builtInImageRetry: '重试', builtInImageRestart: '重启 Harness 使更改生效', builtInImagePending: '重启 Harness 后将加载内置插件。'
     }
 
@@ -115,6 +118,7 @@ window.__ModuleLoader__.load({
       .dshDesktopMarketSpinner{box-sizing:border-box;width:16px;height:16px;border:2px solid var(--dsw-alias-border-l2);border-top-color:var(--dsw-alias-label-primary);border-radius:50%;animation:dshDesktopMarketSpin .75s linear infinite}
       .dshDesktopMarketBusy{display:flex;align-items:center;gap:9px}
       .dshDesktopMarketError{color:var(--dsw-alias-state-error-primary)}
+      .dshDeveloperInstall{box-sizing:border-box;max-width:720px;display:flex;flex-direction:column;gap:16px}.dshDeveloperInstallRow{display:flex;gap:12px;flex-wrap:wrap}.dshDeveloperInstallRow label{display:flex;align-items:center;gap:6px;font-size:13px}.dshDeveloperInstallInput{box-sizing:border-box;width:100%;height:40px;border:1px solid var(--dsw-alias-border-l3);border-radius:10px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);padding:0 12px;font:inherit}.dshDeveloperInstallInput:focus{outline:none;box-shadow:0 0 0 2px var(--dsw-alias-border-l3)}
       .dshDesktopBuiltInImage{list-style:none;border:.5px solid var(--dsw-alias-border-l4);background:var(--dsw-alias-bg-layer-3);border-radius:16px;padding:16px;display:flex;flex-direction:column;gap:10px;color:var(--dsw-alias-label-primary)}.dshDesktopBuiltInImageTitle{font-size:15px;font-weight:600}.dshDesktopBuiltInImageHint{margin:0;font-size:12px;line-height:1.5;color:var(--dsw-alias-label-tertiary)}.dshDesktopBuiltInImageLabel{display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer}.dshDesktopBuiltInImageLabel input{accent-color:var(--dsw-alias-brand-primary)}
       .dshDesktopMarketModalBackdrop{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:24px;background:rgba(0,0,0,.42)}
       .dshDesktopMarketModal{box-sizing:border-box;width:min(440px,100%);padding:24px;border:1px solid var(--dsw-alias-border-l2);border-radius:16px;background:var(--dsw-alias-bg-layer-1);box-shadow:0 18px 48px rgba(0,0,0,.18);display:flex;flex-direction:column;gap:12px}
@@ -279,6 +283,48 @@ window.__ModuleLoader__.load({
           )
         )
       )
+    }
+
+    function DeveloperInstaller({ t }) {
+      const [kind, setKind] = React.useState('github')
+      const [value, setValue] = React.useState('')
+      const [busy, setBusy] = React.useState(false)
+      const [result, setResult] = React.useState(null)
+      const [error, setError] = React.useState('')
+      const install = async () => {
+        if (!value.trim()) return
+        setBusy(true); setError(''); setResult(null)
+        try {
+          const response = await fetch(DEVELOPER_INSTALL_PATH, {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'content-type': 'application/json', accept: 'application/json' },
+            body: JSON.stringify({ kind, value: value.trim() })
+          })
+          const payload = await response.json()
+          if (!response.ok) throw new Error(payload?.error || `HTTP ${response.status}`)
+          setResult(payload)
+        } catch (failure) {
+          setError(failure instanceof Error ? failure.message : String(failure))
+        } finally { setBusy(false) }
+      }
+      const restart = async () => {
+        try { await globalThis.dshDesktop?.restartHarness?.() }
+        catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)) }
+      }
+      return React.createElement('section', { className: 'dshDeveloperInstall' },
+        React.createElement('h2', { className: 'dshDesktopMarketTitle' }, t('developerTitle')),
+        React.createElement('p', { className: 'dshDesktopMarketIntro' }, t('developerIntro')),
+        React.createElement('div', { className: 'dshDeveloperInstallRow' },
+          ['github', 'local'].map(option => React.createElement('label', { key: option },
+            React.createElement('input', { type: 'radio', name: 'developer-source', value: option, checked: kind === option, disabled: busy, onChange: () => { setKind(option); setValue(''); setResult(null); setError('') } }),
+            t(option === 'github' ? 'developerGithub' : 'developerLocal')))),
+        React.createElement('input', { className: 'dshDeveloperInstallInput', value, disabled: busy, placeholder: t(kind === 'github' ? 'developerPlaceholderGithub' : 'developerPlaceholderLocal'), onChange: event => setValue(event.target.value), onKeyDown: event => { if (event.key === 'Enter') void install() } }),
+        React.createElement('div', { className: 'dshDesktopMarketActions' },
+          React.createElement('button', { type: 'button', className: 'dshDesktopMarketButton dshDesktopMarketPrimary', disabled: busy || !value.trim(), onClick: () => void install() }, busy ? t('developerInstalling') : t('developerInstall')),
+          result?.restartRequired ? React.createElement('button', { type: 'button', className: 'dshDesktopMarketButton dshDesktopMarketSecondary', onClick: () => void restart() }, t('developerRestart')) : null),
+        result ? React.createElement('p', { className: 'dshDesktopMarketStatusDetail' }, `${t('developerSuccess')} ${result.name}@${result.version}`) : null,
+        error ? React.createElement('p', { className: 'dshDesktopMarketStatusDetail dshDesktopMarketError', role: 'alert' }, error) : null,
+        React.createElement('p', { className: 'dshDesktopMarketNotice' }, t('developerWarning')))
     }
 
     function MarketManagementTab({ t }) {
@@ -746,6 +792,14 @@ window.__ModuleLoader__.load({
         'dsh-desktop-market-installer: copy dictionaries'
       )
       const t = ctx.locale.bind(NS)
+      ctx.slots.inject('settings.plugins.tab', () =>
+        ctx.slots.register(
+          { name: 'settings.plugins.tab', id: 'desktop-developer-installer', order: 40,
+            label: () => t('developerTab'), locale: NS,
+            inject: () => ({ t }) },
+          DeveloperInstaller
+        )
+      )
       ctx.slots.inject('settings.plugins.tab', () =>
         ctx.slots.register(
           { name: 'settings.plugins.tab', id: 'desktop-host-plugins', order: 20,
