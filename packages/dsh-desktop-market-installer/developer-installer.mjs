@@ -36,7 +36,7 @@ function validateManifest(manifest) {
   return { name: manifest.name, version: manifest.version }
 }
 
-async function githubTarget(url, fetchImpl = fetch) {
+export async function githubTarget(url, fetchImpl = fetch) {
   const match = GITHUB_REPOSITORY.exec(url.trim())
   if (!match) throw new Error('Enter a public GitHub repository URL such as https://github.com/owner/repo.')
   const owner = match[1]
@@ -65,9 +65,10 @@ async function githubTarget(url, fetchImpl = fetch) {
   return { ...identity, pluginSpec: `github:${owner}/${repo}#${sha}`, source: `${owner}/${repo}@${sha.slice(0, 12)}` }
 }
 
-async function localTarget(input) {
-  const path = resolve(input.trim())
-  if (!isAbsolute(path)) throw new Error('Local plugin path must be absolute.')
+export async function localTarget(input) {
+  const raw = input.trim()
+  if (!raw || !isAbsolute(raw)) throw new Error('Local plugin path must be absolute.')
+  const path = resolve(raw)
   const manifest = JSON.parse(await readFile(join(path, 'package.json'), 'utf8'))
   const identity = validateManifest(manifest)
   return { ...identity, pluginSpec: `file:${path}`, source: path }
