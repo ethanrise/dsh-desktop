@@ -158,11 +158,50 @@ jobs:
           )).catch((e) => { console.error(e); process.exit(1) })
           NODE
 
+      # Linux-only helpers from this repo, kept outside the upstream checkout.
+      - name: Check out Linux build helpers
+        uses: actions/checkout@v5
+        with:
+          path: .linux-helpers
+          sparse-checkout: linux
+          persist-credentials: false
+
       - name: Build application and DEB
+        env:
+          HELPERS: ${{ github.workspace }}/.linux-helpers/linux
         run: |
           set -euo pipefail
-          npm run build
-          npx electron-builder --linux deb --x64 --publish never
+          # Upstream's `npm run build` (office:prepare) and afterPack only
+          # support macOS/Windows. Run the same steps with Linux replacements.
+          expected='npm run office:prepare && npm run ppt:build && electron-vite build'
+          actual="$(node -p "require('./package.json').scripts.build")"
+          if [ "$actual" != "$expected" ]; then
+            echo "::warning::Upstream build script changed: '$actual' (expected '$expected'); review linux/ helpers"
+          fi
+
+          node "$HELPERS/patch-deps.mjs" .
+
+          office=bundled
+          if [ -f scripts/office-runtime/prepare.mjs ]; then
+            if ! node "$HELPERS/prepare-office.mjs" .; then
+              echo "::warning::Office runtime could not be prepared for Linux; building without it"
+              office=missing
+            fi
+          else
+            office=none
+          fi
+          if [ "$office" != bundled ]; then
+            # Keep electron-builder's extraResources entry satisfied.
+            rm -rf .build/office-runtime && mkdir -p .build/office-runtime
+            echo "LINUX_NO_OFFICE_RUNTIME=1" >> "$GITHUB_ENV"
+            export LINUX_NO_OFFICE_RUNTIME=1
+          fi
+          echo "OFFICE_RUNTIME=$office" >> "$GITHUB_ENV"
+
+          npm run --if-present ppt:build
+          npx electron-vite build
+          npx electron-builder --linux deb --x64 --publish never \
+            -c.afterPack="$HELPERS/after-pack.cjs"
           mv dist/dsh-desktop-linux-amd64.deb "dist/dsh-desktop-${UPSTREAM_TAG#v}-linux-amd64.deb"
 
       - name: Verify DEB
@@ -261,6 +300,9 @@ jobs:
           Verify the download with the attached \`SHA256SUMS\`.
           This is not an official DataElement release.
           EOF
+          if [ "${OFFICE_RUNTIME:-}" = missing ]; then
+            printf '\n> Note: this build does not include the bundled Office (docx/pptx/xlsx) runtime.\n' >> "$RUNNER_TEMP/notes.md"
+          fi
 
           if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$release_tag" "$asset" dist/SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
