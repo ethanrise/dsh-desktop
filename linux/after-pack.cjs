@@ -48,6 +48,12 @@ module.exports = async function afterPack(context) {
     console.log('Packaged PPT runtime passed')
   }
 
+  // Templates are required during Office plugin activation, before Python use.
+  if (existsSync(upstream('office-runtime/prepare-templates.mjs'))) {
+    const { verifyTemplates } = await import('./verify-templates.mjs')
+    await verifyTemplates(project, path.join(resources, 'office-runtime', 'templates'))
+  }
+
   // 3. Office runtime (skipped when the build has no Office payload).
   if (process.env.LINUX_NO_OFFICE_RUNTIME === '1' || !existsSync(upstream('office-runtime/smoke.py'))) {
     warn('Office runtime not bundled in this build; skipping Office checks')

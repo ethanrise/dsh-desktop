@@ -21,7 +21,7 @@ on:
         default: false
   push:
     branches: [main]
-    paths: [.github/workflows/linux-deb.yml]
+    paths: [.github/workflows/linux-deb.yml, "linux/**"]
 
 permissions:
   contents: read
@@ -48,7 +48,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_TAG: ${{ inputs.tag }}
-          FORCE: ${{ inputs.force }}
+          FORCE: ${{ inputs.force || github.event_name == 'push' }}
+          PUSH_BUILD: ${{ github.event_name == 'push' }}
         run: |
           set -euo pipefail
 
@@ -57,6 +58,11 @@ jobs:
           else
             candidates="$(gh api "repos/$UPSTREAM_REPO/releases?per_page=30" \
               --jq '[.[] | select(.draft | not) | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+"))][:'"$RECENT_RELEASES"'][] | .tag_name')"
+          fi
+
+          # Packaging changes rebuild the latest release even if already published.
+          if [ "$PUSH_BUILD" = true ] && [ -z "$REQUESTED_TAG" ]; then
+            candidates="$(gh api "repos/$UPSTREAM_REPO/releases/latest" --jq .tag_name)"
           fi
 
           tags=()
@@ -169,6 +175,7 @@ jobs:
       - name: Build application and DEB
         env:
           HELPERS: ${{ github.workspace }}/.linux-helpers/linux
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           # Upstream's `npm run build` (office:prepare) and afterPack only
@@ -183,9 +190,10 @@ jobs:
 
           office=bundled
           if [ -f scripts/office-runtime/prepare.mjs ]; then
-            if ! node "$HELPERS/prepare-office.mjs" .; then
-              echo "::warning::Office runtime could not be prepared for Linux; building without it"
-              office=missing
+            # Office is required by bootstrap: never publish a partial payload.
+            node "$HELPERS/prepare-office.mjs" .
+            if [ -f scripts/office-runtime/prepare-templates.mjs ]; then
+              node "$HELPERS/prepare-templates.mjs" .
             fi
           else
             office=none
@@ -220,6 +228,12 @@ jobs:
           deb_version="${version/-/\~}"
           [ "$(dpkg-deb -f "$asset" Version)" = "$deb_version" ] || fail "Version != $deb_version"
           [ "$(dpkg-deb -f "$asset" Architecture)" = "amd64" ] || fail "Architecture"
+          # Do not pipe into grep -q under pipefail (dpkg-deb can get SIGPIPE).
+          dpkg-deb -c "$asset" > "$RUNNER_TEMP/deb-contents.txt"
+          if [ -f scripts/office-runtime/prepare-templates.mjs ]; then
+            grep -E ' /?[^ ]*/office-runtime/templates/catalog\.json$' "$RUNNER_TEMP/deb-contents.txt" \
+              || fail "Missing office-runtime/templates/catalog.json in DEB"
+          fi
           dpkg-deb -x "$asset" "$root"
 
           # Print the layout up front so any failure below is easy to diagnose.
@@ -229,6 +243,9 @@ jobs:
 
           app_dir="$(dirname "$(find "$root/opt" -maxdepth 2 -type f -name dsh-desktop -perm -u+x | head -1)")"
           [ -n "$app_dir" ] && [ "$app_dir" != "." ] || fail "No executable dsh-desktop under /opt"
+          if [ -f scripts/office-runtime/prepare-templates.mjs ]; then
+            node .linux-helpers/linux/verify-templates.mjs . "$app_dir/resources/office-runtime/templates"
+          fi
           desktop="$root/usr/share/applications/dsh-desktop.desktop"
           [ -f "$desktop" ] || fail "Missing $desktop"
           [ -f "$root/usr/share/icons/hicolor/256x256/apps/dsh-desktop.png" ] || fail "Missing 256px icon"
