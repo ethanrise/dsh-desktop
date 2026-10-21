@@ -82,7 +82,12 @@ module.exports = async function afterPack(context) {
     const checker = path.join(resources, 'office-runtime', 'office-skills', 'scripts', 'check_office.py')
     for (const extension of ['docx', 'pptx', 'xlsx']) {
       const input = path.join(scratch, `sample.${extension}`)
-      await run(python, ['-I', '-B', checker, input, '--contains', 'Office runtime smoke'])
+      // New skills removed check_office.py; upstream smoke.py now reopens
+      // the documents and checks their content and OPC structure itself.
+      // Retain the additional checker only for older releases that ship it.
+      if (existsSync(checker)) {
+        await run(python, ['-I', '-B', checker, input, '--contains', 'Office runtime smoke'])
+      }
       await soft(`Office ${extension} -> PDF conversion`, async () => {
         const output = path.join(scratch, `${extension}.pdf`)
         await run(executable, [cli, 'convert', '--input', input, '--output', output])
