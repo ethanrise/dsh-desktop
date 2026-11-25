@@ -24,6 +24,10 @@ sudo apt install ./dsh-desktop-<版本号>-linux-amd64.deb
 sha256sum -c SHA256SUMS
 ```
 
+### 可选插件 · Linux 桌面与浏览器控制
+
+想让 DSH 在 Linux 上截图、点击或控制浏览器？可以单独安装 [dsh-cua-linux](https://github.com/ethanrise/dsh-cua-linux)。桌面控制适用于 X11/XWayland，Chromium 页面可通过 CDP 操作。安装方法见插件 README。
+
 ## 说明
 
 - 只添加了打包相关的元数据（版本号、图标、`.desktop` 启动项），应用代码与上游 tag 完全一致。

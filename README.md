@@ -25,6 +25,10 @@ Verify the download with the `SHA256SUMS` file attached to each release:
 sha256sum -c SHA256SUMS
 ```
 
+### Optional plugin — Linux desktop and browser control
+
+Install [dsh-cua-linux](https://github.com/ethanrise/dsh-cua-linux) separately to let DSH take screenshots and use the mouse and keyboard on X11/XWayland, or automate Chromium pages over CDP. See the plugin README for setup.
+
 ## Notes
 
 - Only packaging metadata is added (version, icons, `.desktop` entry);
