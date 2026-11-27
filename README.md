@@ -8,8 +8,8 @@ which only ships official Windows and macOS installers.
 
 This repository contains **no application source**. A GitHub Actions
 workflow checks upstream every 3 hours, builds each new release tag
-(`vX.Y.Z`) from the unmodified upstream source, and publishes it here as
-`linux-vX.Y.Z`.
+(`vX.Y.Z`) with Linux packaging and integration changes, and publishes it
+here as `linux-vX.Y.Z-rN`, where `N` is the Debian package revision.
 
 ## Install
 
@@ -27,12 +27,12 @@ sha256sum -c SHA256SUMS
 
 ### Optional plugin — Linux desktop and browser control
 
-Install [dsh-cua-linux](https://github.com/ethanrise/dsh-cua-linux) separately to let DSH take screenshots and use the mouse and keyboard on X11/XWayland, or automate Chromium pages over CDP. See the plugin README for setup.
+Linux builds from `v0.14.1` with the bundled [dsh-cua-linux](https://github.com/ethanrise/dsh-cua-linux) start with computer use disabled. In **Settings → Built-in plugins → Computer use**, select **Enable computer use** to install it from the local package. If you already installed the plugin, the same tab manages its existing installation. Desktop control supports X11 and X11 applications under XWayland.
 
 ## Notes
 
-- Only packaging metadata is added (version, icons, `.desktop` entry);
-  the application code is exactly the upstream tag.
+- Linux builds include packaging metadata and the Desktop integration for bundled computer use.
+- Older packages without the bundle can install the plugin separately.
 - Prerelease tags (e.g. `v0.10.0-beta`) are published as GitHub prereleases.
 - Report application bugs upstream; report packaging issues here.
 - This is not an official DataElement release.
@@ -40,4 +40,6 @@ Install [dsh-cua-linux](https://github.com/ethanrise/dsh-cua-linux) separately t
 ## Build manually
 
 Actions → **Build unofficial Linux DEB** → Run workflow, optionally with a
-specific upstream tag and "force" to rebuild.
+specific upstream tag. For another build of the same tag, set a higher
+revision. For example, `linux-v0.14.1-r2` installs as `0.14.1-2`. Each
+revision has its own package and checksum.

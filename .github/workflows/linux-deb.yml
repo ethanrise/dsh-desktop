@@ -14,11 +14,11 @@ on:
         description: "Upstream tag to build, e.g. v0.9.3 (empty = every recent release still missing a Linux build)"
         required: false
         type: string
-      force:
-        description: "Rebuild even if the Linux asset already exists"
+      revision:
+        description: "Debian package revision for the requested tag"
         required: false
-        type: boolean
-        default: false
+        type: string
+        default: "1"
   push:
     branches: [main]
     paths: [.github/workflows/linux-deb.yml, "linux/**"]
@@ -48,10 +48,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REQUESTED_TAG: ${{ inputs.tag }}
-          FORCE: ${{ inputs.force || github.event_name == 'push' }}
+          REQUESTED_REVISION: ${{ inputs.revision || '1' }}
           PUSH_BUILD: ${{ github.event_name == 'push' }}
         run: |
           set -euo pipefail
+
+          if ! [[ "$REQUESTED_REVISION" =~ ^[1-9][0-9]{0,5}$ ]]; then
+            echo "::error::Revision must be a positive integer of at most six digits."
+            exit 1
+          fi
+          if [ "$REQUESTED_REVISION" != 1 ] && [ -z "$REQUESTED_TAG" ]; then
+            echo "::error::Specify an upstream tag when requesting a new revision."
+            exit 1
+          fi
 
           if [ -n "$REQUESTED_TAG" ]; then
             candidates="$REQUESTED_TAG"
@@ -60,33 +69,37 @@ jobs:
               --jq '[.[] | select(.draft | not) | select(.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+"))][:'"$RECENT_RELEASES"'][] | .tag_name')"
           fi
 
-          # Packaging changes rebuild the latest release even if already published.
+          # Packaging changes check the latest upstream release immediately.
           if [ "$PUSH_BUILD" = true ] && [ -z "$REQUESTED_TAG" ]; then
             candidates="$(gh api "repos/$UPSTREAM_REPO/releases/latest" --jq .tag_name)"
           fi
 
           tags=()
           for tag in $candidates; do
+            if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::Unsupported upstream tag: $tag"
+              exit 1
+            fi
             sha="$(gh api "repos/$UPSTREAM_REPO/commits/$tag" --jq .sha)" || {
               echo "::warning::Upstream tag $tag not found, skipping"; continue; }
-            asset="dsh-desktop-${tag#v}-linux-amd64.deb"
-            if [ "$FORCE" != "true" ]; then
-              # Early builds were published under the bare upstream tag (e.g.
-              # v0.9.0) before the linux- prefix; count those as built too.
-              built=""
-              for existing in "linux-$tag" "$tag"; do
-                if gh release view "$existing" --repo "$GITHUB_REPOSITORY" --json assets \
-                  --jq '.assets[].name' 2>/dev/null | grep -Fxq "$asset"; then
-                  built="$existing"; break
-                fi
-              done
-              if [ -n "$built" ]; then
-                echo "$built already has $asset"
+            version="${tag#v}"
+            deb_version="${version/-/\~}-$REQUESTED_REVISION"
+            release_tag="linux-$tag-r$REQUESTED_REVISION"
+            if [ -z "$REQUESTED_TAG" ] && dpkg --compare-versions "${version/-/\~}" lt 0.14.1; then
+              if gh release view "linux-$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+                 gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+                echo "$tag already has a historical Linux release"
                 continue
               fi
             fi
-            echo "Will build $tag ($sha)"
-            tags+=("{\"tag\":\"$tag\",\"sha\":\"$sha\"}")
+            if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "$release_tag already exists. Use a new revision to publish another build."
+              continue
+            fi
+            echo "Will build $release_tag ($sha), Debian version $deb_version"
+            tags+=("$(jq -nc --arg tag "$tag" --arg sha "$sha" --arg revision "$REQUESTED_REVISION" \
+              --arg release "$release_tag" --arg version "$deb_version" \
+              '{tag:$tag, sha:$sha, revision:$revision, release:$release, version:$version}')")
           done
 
           # Build oldest first so the newest release ends up marked "latest".
@@ -111,6 +124,9 @@ jobs:
     env:
       UPSTREAM_TAG: ${{ matrix.tag }}
       SOURCE_SHA: ${{ matrix.sha }}
+      PACKAGE_REVISION: ${{ matrix.revision }}
+      RELEASE_TAG: ${{ matrix.release }}
+      DEB_VERSION: ${{ matrix.version }}
     steps:
       - name: Check out upstream source at ${{ matrix.tag }}
         uses: actions/checkout@v5
@@ -138,6 +154,7 @@ jobs:
           }
           pkg.version = version
           pkg.build ??= {}
+          pkg.build.buildNumber = process.env.PACKAGE_REVISION
           pkg.build.linux = {
             target: [{ target: 'deb', arch: ['x64'] }],
             category: 'Development',
@@ -148,6 +165,10 @@ jobs:
           }
           pkg.build.extraResources ??= []
           pkg.build.extraResources.push({ from: 'LICENSE', to: 'LICENSE' })
+          // Historical builds predate the verified Desktop plugin-manager contract.
+          const bundleLinuxCua = require('semver').gte(version, '0.14.1')
+          if (bundleLinuxCua) pkg.build.extraResources.push({ from: '.build/linux-plugins', to: 'linux-plugins' })
+          fs.appendFileSync(process.env.GITHUB_ENV, `BUNDLE_LINUX_CUA=${bundleLinuxCua}\n`)
           fs.writeFileSync('package.json', `${JSON.stringify(pkg, null, 2)}\n`)
           NODE
 
@@ -187,6 +208,10 @@ jobs:
           fi
 
           node "$HELPERS/patch-deps.mjs" .
+          if [ "$BUNDLE_LINUX_CUA" = true ]; then
+            node "$HELPERS/prepare-cua.mjs" .build/linux-plugins
+            node "$HELPERS/patch-cua-ui.mjs" . .build/linux-plugins/dsh-cua-linux-*.tgz
+          fi
 
           office=bundled
           if [ -f scripts/office-runtime/prepare.mjs ]; then
@@ -210,13 +235,13 @@ jobs:
           npx electron-vite build
           npx electron-builder --linux deb --x64 --publish never \
             -c.afterPack="$HELPERS/after-pack.cjs"
-          mv dist/dsh-desktop-linux-amd64.deb "dist/dsh-desktop-${UPSTREAM_TAG#v}-linux-amd64.deb"
+          mv dist/dsh-desktop-linux-amd64.deb "dist/dsh-desktop-${DEB_VERSION}-linux-amd64.deb"
 
       - name: Verify DEB
         run: |
           set -euo pipefail
           version="${UPSTREAM_TAG#v}"
-          asset="dist/dsh-desktop-${version}-linux-amd64.deb"
+          asset="dist/dsh-desktop-${DEB_VERSION}-linux-amd64.deb"
           root="$RUNNER_TEMP/deb-root"
           fail() { echo "::error::$1"; exit 1; }
           warn() { echo "::warning::$1"; }
@@ -225,8 +250,7 @@ jobs:
           dpkg-deb --info "$asset"
           [ "$(dpkg-deb -f "$asset" Package)" = "dsh-desktop" ] || fail "Package name"
           # electron-builder writes prereleases the Debian way: 0.10.0-beta -> 0.10.0~beta
-          deb_version="${version/-/\~}"
-          [ "$(dpkg-deb -f "$asset" Version)" = "$deb_version" ] || fail "Version != $deb_version"
+          [ "$(dpkg-deb -f "$asset" Version)" = "$DEB_VERSION" ] || fail "Version != $DEB_VERSION"
           [ "$(dpkg-deb -f "$asset" Architecture)" = "amd64" ] || fail "Architecture"
           # Do not pipe into grep -q under pipefail (dpkg-deb can get SIGPIPE).
           dpkg-deb -c "$asset" > "$RUNNER_TEMP/deb-contents.txt"
@@ -245,6 +269,11 @@ jobs:
           [ -n "$app_dir" ] && [ "$app_dir" != "." ] || fail "No executable dsh-desktop under /opt"
           if [ -f scripts/office-runtime/prepare-templates.mjs ]; then
             node .linux-helpers/linux/verify-templates.mjs . "$app_dir/resources/office-runtime/templates"
+          fi
+          if [ "$BUNDLE_LINUX_CUA" = true ]; then
+            cua=("$app_dir"/resources/linux-plugins/dsh-cua-linux-*.tgz)
+            [ "${#cua[@]}" -eq 1 ] && [ -f "${cua[0]}" ] || fail "Missing bundled computer-use plugin"
+            node .linux-helpers/linux/verify-cua.mjs . "$app_dir/dsh-desktop" "${cua[0]}"
           fi
           desktop="$root/usr/share/applications/dsh-desktop.desktop"
           [ -f "$desktop" ] || fail "Missing $desktop"
@@ -273,21 +302,20 @@ jobs:
 
       - uses: actions/upload-artifact@v5
         with:
-          name: dsh-desktop-linux-amd64-${{ matrix.tag }}
+          name: dsh-desktop-linux-amd64-${{ matrix.release }}
           path: |
             dist/dsh-desktop-*-linux-amd64.deb
             dist/SHA256SUMS
           if-no-files-found: error
           retention-days: 7
 
-      - name: Publish linux-${{ matrix.tag }}
+      - name: Publish ${{ matrix.release }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          release_tag="linux-$UPSTREAM_TAG"
-          asset="dist/dsh-desktop-${UPSTREAM_TAG#v}-linux-amd64.deb"
-          title="DSH Desktop $UPSTREAM_TAG - Unofficial Linux build"
+          asset="dist/dsh-desktop-${DEB_VERSION}-linux-amd64.deb"
+          title="DSH Desktop $UPSTREAM_TAG - Unofficial Linux build r$PACKAGE_REVISION"
           # Follow upstream's own Pre-release flag. A tag with no upstream
           # release (manual builds) falls back to "has a -suffix".
           upstream_pre="$(gh api "repos/$UPSTREAM_REPO/releases/tags/$UPSTREAM_TAG" \
@@ -306,6 +334,7 @@ jobs:
 
           - Upstream tag: \`$UPSTREAM_TAG\`
           - Source commit: \`$SOURCE_SHA\`
+          - Debian package version: \`${DEB_VERSION}\`
           - Architecture: \`amd64\`
 
           Install:
@@ -317,22 +346,21 @@ jobs:
           Verify the download with the attached \`SHA256SUMS\`.
           This is not an official DataElement release.
           EOF
+          if [ "$BUNDLE_LINUX_CUA" = true ]; then
+            bundle=(.build/linux-plugins/dsh-cua-linux-*.tgz)
+            cua_version="${bundle[0]##*/dsh-cua-linux-}"
+            printf '\nIncludes dsh-cua-linux %s, off by default. Enable it offline under Settings → Built-in plugins → Computer use.\n' \
+              "${cua_version%.tgz}" >> "$RUNNER_TEMP/notes.md"
+          fi
           if [ "${OFFICE_RUNTIME:-}" = missing ]; then
             printf '\n> Note: this build does not include the bundled Office (docx/pptx/xlsx) runtime.\n' >> "$RUNNER_TEMP/notes.md"
           fi
 
-          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$release_tag" "$asset" dist/SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
-            gh release edit "$release_tag" --title "$title" --notes-file "$RUNNER_TEMP/notes.md" \
-              --repo "$GITHUB_REPOSITORY"
-          else
-            # Never let a backfilled older version become "Latest";
-            # the sync-release-flags job below mirrors upstream's Latest.
-            gh release create "$release_tag" "$asset" dist/SHA256SUMS $prerelease \
-              --latest=false \
-              --target "$GITHUB_SHA" --title "$title" --notes-file "$RUNNER_TEMP/notes.md" \
-              --repo "$GITHUB_REPOSITORY"
-          fi
+          # A release tag and its checksum identify one immutable build.
+          gh release create "$RELEASE_TAG" "$asset" dist/SHA256SUMS $prerelease \
+            --latest=false \
+            --target "$GITHUB_SHA" --title "$title" --notes-file "$RUNNER_TEMP/notes.md" \
+            --repo "$GITHUB_REPOSITORY"
 
   # Mirror upstream's release flags onto the matching linux-v* releases:
   # the same Pre-release state, and the same version marked Latest. Runs every
@@ -351,26 +379,25 @@ jobs:
         run: |
           set -euo pipefail
           ours="$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
-            --json tagName,isPrerelease --jq '.[] | "\(.tagName) \(.isPrerelease)"')"
+            --json tagName,isPrerelease,isDraft --jq '.[] | select(.isDraft | not) | "\(.tagName) \(.isPrerelease)"')"
 
           gh api "repos/$UPSTREAM_REPO/releases?per_page=30" \
             --jq '.[] | select(.draft | not) | "\(.tag_name) \(.prerelease)"' |
           while read -r tag pre; do
-            mine="$(printf '%s\n' "$ours" | awk -v t="linux-$tag" '$1 == t {print $2}')"
-            if [ -n "$mine" ] && [ "$mine" != "$pre" ]; then
-              echo "linux-$tag: prerelease $mine -> $pre"
-              gh release edit "linux-$tag" --prerelease="$pre" --latest=false \
-                --repo "$GITHUB_REPOSITORY"
-            fi
+            while read -r mine_tag mine_pre; do
+              if [ "$mine_pre" != "$pre" ]; then
+                gh release edit "$mine_tag" --prerelease="$pre" --latest=false --repo "$GITHUB_REPOSITORY"
+              fi
+            done < <(awk -v t="linux-$tag" '$1 == t || (index($1, t "-r") == 1 && substr($1, length(t) + 3) ~ /^[0-9]+$/)' <<< "$ours")
           done
 
           upstream_latest="$(gh api "repos/$UPSTREAM_REPO/releases/latest" --jq .tag_name 2>/dev/null || true)"
           if [ -z "$upstream_latest" ]; then
             echo "Upstream has no Latest release"; exit 0
           fi
-          target="linux-$upstream_latest"
-          if ! gh release view "$target" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "$target not built yet; leaving Latest unchanged"; exit 0
+          target="$(awk -v t="linux-$upstream_latest" '$1 == t || (index($1, t "-r") == 1 && substr($1, length(t) + 3) ~ /^[0-9]+$/) { print $1 }' <<< "$ours" | sort -V | tail -n 1)"
+          if [ -z "$target" ]; then
+            echo "$upstream_latest not built yet; leaving Latest unchanged"; exit 0
           fi
           current="$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>/dev/null || true)"
           if [ "$current" = "$target" ]; then
