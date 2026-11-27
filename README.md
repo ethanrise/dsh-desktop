@@ -27,7 +27,7 @@ sha256sum -c SHA256SUMS
 
 ### Optional plugin — Linux desktop and browser control
 
-Linux builds from `v0.14.1` with the bundled [dsh-cua-linux](https://github.com/ethanrise/dsh-cua-linux) start with computer use disabled. In **Settings → Built-in plugins → Computer use**, select **Enable computer use** to install it from the local package. If you already installed the plugin, the same tab manages its existing installation. Desktop control supports X11 and X11 applications under XWayland.
+Starting with `linux-v0.14.1-r1`, Linux amd64 `.deb` packages bundle [dsh-cua-linux](https://github.com/ethanrise/dsh-cua-linux). Computer use is disabled by default on fresh installations. In **Settings → Built-in plugins → Computer use**, select **Enable computer use** to install it from the local package. If you already installed the plugin, the same tab manages its existing installation. Desktop control supports X11 and X11 applications under XWayland.
 
 ## Notes
 

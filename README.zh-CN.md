@@ -26,7 +26,7 @@ sha256sum -c SHA256SUMS
 
 ### 可选插件 · Linux 桌面与浏览器控制
 
-从 `v0.14.1` 起，带有内置 [dsh-cua-linux](https://github.com/ethanrise/dsh-cua-linux) 的 Linux 安装包默认关闭电脑操控。在 **设置 → 内置插件 → 电脑操控** 点击 **启用电脑操控**，即可从本地安装。已安装过的用户可以在这里管理现有插件。桌面操控支持 X11，以及 XWayland 下的 X11 应用。
+从 `linux-v0.14.1-r1` 起，Linux amd64 `.deb` 安装包内置 [dsh-cua-linux](https://github.com/ethanrise/dsh-cua-linux)。全新安装时，电脑操控默认关闭。在 **设置 → 内置插件 → 电脑操控** 点击 **启用电脑操控**，即可从本地安装。已安装过的用户可以在这里管理现有插件。桌面操控支持 X11，以及 XWayland 下的 X11 应用。
 
 ## 说明
 
